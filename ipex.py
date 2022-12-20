@@ -1,3 +1,4 @@
+import os
 import sys
 import math
 import shutil
@@ -458,8 +459,6 @@ def main(images_paths):
     if not folder_created:
         return False
 
-    result_folder_empty = False#debug
-
     # Step 2: Create Straightened versions of images
     paper_index = 1
     for image_path in images_paths:
@@ -495,7 +494,7 @@ def main(images_paths):
         save_to_results_folder(paper, filename)
 
     # Step 3: Delete the created results folder if empty
-    if result_folder_empty:
+    if len(os.listdir(PATH_DIR_RESULTS)) == 0:
         delete_results_folder()
 
 if __name__ == '__main__':
