@@ -359,127 +359,7 @@ def normalize_vector(vector):
        return vector
     return vector / length
 
-def is_deformation_negligable(corners):
-    side_top_vec = normalize_vector(corners[1] - corners[0])
-    side_rgh_vec = normalize_vector(corners[2] - corners[1])
-    side_btm_vec = normalize_vector(corners[2] - corners[3])
-    side_lft_vec = normalize_vector(corners[3] - corners[0])
-
-    # Checking if the corners (top-left and bottom-right) are both 90° (minus a tolerance)
-    if abs(numpy.dot(side_top_vec, side_lft_vec)) <= PAPER_DEFORMATION_TOLERANCE and \
-        abs(numpy.dot(side_rgh_vec, side_btm_vec)) <= PAPER_DEFORMATION_TOLERANCE:
-        return True
-
-    # ALTERNATIVE METHOD:
-    # Checking if the opposite sides are parallel
-    #if math.isclose((side_top_vec[0] * side_btm_vec[1]), (side_top_vec[1] * side_btm_vec[0]), abs_tol=.01) and \
-    #    math.isclose((side_lft_vec[0] * side_rgh_vec[1]), (side_lft_vec[1] * side_rgh_vec[0]), abs_tol=.01):
-    #    return True
-    
-    return False
-
 def compute_aspect_ratio(image, corners):
-    # Based on :
-    # - https://andrewkay.name/blog/post/aspect-ratio-of-a-rectangle-in-perspective/
-
-    # Step 1: Get image center, will be used as origin
-    h, w = image.shape[:2]
-    origin = (w * .5, h * .5)
-    
-    # Step 2: Points coords from image origin
-    # /!\ CAREFUL : points need to be in zig-zag order (A, B, D, C)
-    a = corners[0] - origin
-    b = corners[1] - origin
-    c = corners[3] - origin
-    d = corners[2] - origin
-    
-    # Step 3: Check if the camera lie into the plane of the rectangle
-    # Coplanar if three points are collinear, in that case the aspect ratio cannot be computed
-    M = numpy.array([[b[0], c[0], d[0]], [b[1], c[1], d[1]], [1., 1., 1.]])
-    det = numpy.linalg.det(M)
-    if math.isclose(det, 0., abs_tol=.001):
-        # Cannot compute the aspect ratio, the caller need to check if the return value is 0.
-        return 0.
-
-    # Step 4: Create the matrixes
-    A = numpy.array([[1., 0., -b[0], 0., 0., 0.],
-                     [0., 1., -b[1], 0., 0., 0.],
-                     [0., 0.,    0., 1., 0., -c[0]],
-                     [0., 0.,    0., 0., 1., -c[1]],
-                     [1., 0., -d[0], 1., 0., -d[0]],
-                     [0., 1., -d[1], 0., 1., -d[1]]], dtype=float)
-    B = numpy.array([[b[0]-a[0]],
-                     [b[1]-a[1]],
-                     [c[0]-a[0]],
-                     [c[1]-a[1]],
-                     [d[0]-a[0]],
-                     [d[1]-a[1]]], dtype=float)
-
-    # Step 5: Solve it, this will give us [Ux, Uy, (Uz / λ), Vx, Vy, (Vz / λ)]
-    s = numpy.linalg.solve(A, B)
-
-    # Step 6: Compute λ, it's the focal length
-    l = 0.
-    l_sq = ((-(s[0] * s[3]) - (s[1] * s[4])) / (s[2] * s[5]))
-    if l_sq > 0.:
-        l = numpy.sqrt(l_sq)
-    # If l_sq <= 0, λ cannot be computed, two sides of the rectangle's image are parallel
-    # Either Uz and/or Vz is equal zero, so we leave l = 0
-
-    # Step 7: Get U & V
-    u = numpy.linalg.norm([s[0], s[1], (s[2] * l)])
-    v = numpy.linalg.norm([s[3], s[4], (s[5] * l)])
-
-    return (v / u)
-
-def compute_aspect_ratio_2(image, corners):
-    # Based on :
-    # - https://www.microsoft.com/en-us/research/publication/2016/11/Digital-Signal-Processing.pdf
-    # - http://research.microsoft.com/en-us/um/people/zhang/papers/tr03-39.pdf
-
-    # Step 1: Compute image center (a.k.a principal point of the image)
-    h, w = image.shape[:2]
-    u0 = w * .5
-    v0 = h * .5
-
-    # Make homeneous coordinates
-    # /!\ CAREFUL : points need to be in zig-zag order (A, B, D, C)
-    m1 = numpy.array([*corners[0], 1.])
-    m2 = numpy.array([*corners[1], 1.])
-    m3 = numpy.array([*corners[3], 1.])
-    m4 = numpy.array([*corners[2], 1.])
-
-    k2 = numpy.dot(numpy.cross(m1, m4), m3) / numpy.dot(numpy.cross(m2, m4), m3)
-    k3 = numpy.dot(numpy.cross(m1, m4), m2) / numpy.dot(numpy.cross(m3, m4), m2)
-
-    # Computing U & V vectors, but at this point the z value of these vectors are in the form z / λ
-    # Where λ is the focal length
-    n2 = (k2 * m2) - m1
-    n3 = (k3 * m3) - m1
-
-    # Unpack vector for avoid using accessors
-    n21, n22, n23 = n2
-    n31, n32, n33 = n3
-
-    if math.isclose(n23, .0, abs_tol=.01) or math.isclose(n33, .0, abs_tol=.01):
-        # There is two opposite sides parallel (or almost parallel)
-        aspect_ratio = numpy.sqrt((n31 ** 2 + n32 ** 2) / (n21 ** 2 + n22 ** 2))
-        return aspect_ratio
-
-    f = numpy.sqrt(numpy.abs((1. / (n23 * n33)) * ( (n21 * n31 - ((n21 * n33 + n23 * n31) * u0) + n23 * n33 * (u0 ** 2)) + \
-                                                    (n22 * n32 - ((n22 * n33 + n23 * n32) * v0) + n23 * n33 * (v0 ** 2)) )))
-
-    A = numpy.array([[f, 0., u0], [0., f, v0], [0., 0., 1.]]).astype('float32')
-
-    Ati = numpy.linalg.inv(numpy.transpose(A))
-    Ai = numpy.linalg.inv(A)
-
-    # Calculate the real aspect ratio
-    aspect_ratio = numpy.sqrt(numpy.dot(numpy.dot(numpy.dot(n3, Ati), Ai), n3) / numpy.dot(numpy.dot(numpy.dot(n2, Ati), Ai), n2))
-
-    return aspect_ratio
-
-def compute_aspect_ratio_3(image, corners):
     # Based on :
     # - https://www.microsoft.com/en-us/research/publication/2016/11/Digital-Signal-Processing.pdf
     # - http://research.microsoft.com/en-us/um/people/zhang/papers/tr03-39.pdf
@@ -509,12 +389,12 @@ def compute_aspect_ratio_3(image, corners):
     # If l_sq <= 0, λ cannot be computed, two sides of the rectangle's image are parallel
     # Either Uz and/or Vz is equal zero, so we leave l = 0
 
-    # Step 5: Computing real U & V vectors, BUT the z value of these vectors are in the form: z / f
+    # Step 5: Computing U & V vectors, BUT the z value of these vectors are in the form: z / f
     # Where f is the focal length
     u = (k2 * p2) - p1
     v = (k3 * p3) - p1
 
-    # Step 6: Get U & V
+    # Step 6: Get normalized U & V
     u = numpy.linalg.norm([u[0], u[1], (u[2] * f)])
     v = numpy.linalg.norm([v[0], v[1], (v[2] * f)])
 
@@ -532,16 +412,13 @@ def compute_paper_size(image, corners):
     paper_avg_height = 0.5 * (numpy.linalg.norm(side_lft_vec) + numpy.linalg.norm(side_rgh_vec))
 
     # Step 2: If deformation is negligable avoid computation and return the average dimensions
-    if is_deformation_negligable(corners):
+    #         Checking if the opposite sides are parallel
+    if math.isclose((side_top_vec[0] * side_btm_vec[1]), (side_top_vec[1] * side_btm_vec[0]), abs_tol=PAPER_DEFORMATION_TOLERANCE) and \
+        math.isclose((side_lft_vec[0] * side_rgh_vec[1]), (side_lft_vec[1] * side_rgh_vec[0]), abs_tol=PAPER_DEFORMATION_TOLERANCE):
         return (paper_avg_width, paper_avg_height)
 
     # Step 3: Compute aspect ratio
     aspect_ratio = compute_aspect_ratio(image, corners)
-    LOG.warning(aspect_ratio)
-    aspect_ratio = compute_aspect_ratio_2(image, corners)
-    LOG.warning(aspect_ratio)
-    aspect_ratio = compute_aspect_ratio_3(image, corners)
-    LOG.warning(aspect_ratio)
 
     if aspect_ratio == 0.:
         # The ratio could not be computed, use a fallback
