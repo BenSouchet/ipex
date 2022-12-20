@@ -18,6 +18,8 @@ KERNEL_ERODE_SIZE = 3 # Size in pixels of the "brush" for the erode operation, v
 SIMPLIFIED_CONTOUR_MAX_COEF = 0.15 # Maximum ratio of simplification allowed for the contour point reduction (e.g. simplify_contour function)
 PAPER_DEFORMATION_TOLERANCE = 0.01 # Above this value a complexe method will be used to compute paper aspect ratio
 
+DEBUG = False
+
 class ColoredFormatter(logging.Formatter):
     """Custom formatter handling color"""
     cyan = '\x1b[36;20m'
@@ -160,13 +162,11 @@ def convert_to_binary_image(image):
     # Step 2.B: Applying a morphological opening & closing to remove useless blobs (optional)
     layer_1 = cv.morphologyEx(layer_1, cv.MORPH_OPEN, kernel_morph)
     layer_1 = cv.morphologyEx(layer_1, cv.MORPH_CLOSE, kernel_morph)
-    save_to_results_folder(layer_1, '05_A.png')### DEBUG
 
     # Step 3: Create the second layer using adaptive thresholding method
     layer_2 = cv.adaptiveThreshold(image, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 17, 3)
     # Step 3.B: Applying a morphological closing to avoid discontinuated shapes
     layer_2 = cv.morphologyEx(layer_2, cv.MORPH_CLOSE, kernel_morph)
-    save_to_results_folder(layer_2, '05_B.png')### DEBUG
 
     # Step 4: Merging the two layer by doing a substraction
     image = layer_1 - layer_2
@@ -271,30 +271,36 @@ def find_paper_contour_from_binary_image(image):
     return contour
 
 def retrieve_contour(image):
-    original = image.copy()### DEBUG
-    downscale_factor2, original = downscale_image(original)### DEBUG
+    if DEBUG:
+        original = image.copy()
+        _, original = downscale_image(original)
 
     # Step 1: Convert image to grayscale
     image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-    save_to_results_folder(image, '01_Grayscale.png')### DEBUG
+    if DEBUG:
+        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_01_Grayscale.png')
 
     # Step 2: Downscale the image if necessary, save the factor
     downscale_factor, image = downscale_image(image)
-    save_to_results_folder(image, '02_Downscale.png')### DEBUG
+    if DEBUG:
+        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_02_Downscale.png')
 
     # Step 3: Median blur the image (a.k.a Noise Median Reduction),
     # this help removing the unecessary details while conserving the edges
     aperture_linear_size = 9
     image = cv.medianBlur(image, aperture_linear_size)
-    save_to_results_folder(image, '03_MedianBlur.png')### DEBUG
+    if DEBUG:
+        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_03_MedianBlur.png')
 
     # Step 4: Correct the brightness and contrast (optional)
     image = auto_brightness_and_contrast(image, 5)
-    save_to_results_folder(image, '04_Contrast.png')### DEBUG
+    if DEBUG:
+        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_04_Contrast.png')
 
     # Step 5: Convert to binary map (threshold & morphological transformations)
     image = convert_to_binary_image(image)
-    save_to_results_folder(image, '05_Treshold.png')### DEBUG
+    if DEBUG:
+        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_05_Treshold.png')
 
     # From this point in the process there is two very different ways:
     # 1) Using cv.findContours, extracting the biggest contour, check the shape to see it's a rectangle
@@ -309,8 +315,9 @@ def retrieve_contour(image):
     if contour is None:
         return None
 
-    cv.drawContours(original, [contour], -1, (0, 0, 255), 1, cv.LINE_AA)### DEBUG
-    save_to_results_folder(original, '06_Contour.png')### DEBUG
+    if DEBUG:
+        cv.drawContours(original, [contour], -1, (0, 0, 255), 1, cv.LINE_AA)
+        save_to_results_folder(original, 'DEBUG_Retrieve_Contour_06_Contour.png')
 
     # Step 7: Very important! Apply the downscale factor to scale up the contour to the correct size
     contour = (contour * (1.0 / downscale_factor))
@@ -348,8 +355,8 @@ def get_corners_from_coutour(contour):
                                 contour[index_pnt_last][0],
                                 contour[index_pnt_prev][0]])
 
-    # Step 3; Convert array to int
-    corners = numpy.rint(corners).astype(int)
+    # Step 3: Convert array to int
+    #corners = numpy.rint(corners).astype(int)
 
     return corners
 
@@ -415,7 +422,7 @@ def compute_paper_size(image, corners):
     #         Checking if the opposite sides are parallel
     if math.isclose((side_top_vec[0] * side_btm_vec[1]), (side_top_vec[1] * side_btm_vec[0]), abs_tol=PAPER_DEFORMATION_TOLERANCE) and \
         math.isclose((side_lft_vec[0] * side_rgh_vec[1]), (side_lft_vec[1] * side_rgh_vec[0]), abs_tol=PAPER_DEFORMATION_TOLERANCE):
-        return (paper_avg_width, paper_avg_height)
+        return (round(paper_avg_width), round(paper_avg_height))
 
     # Step 3: Compute aspect ratio
     aspect_ratio = compute_aspect_ratio(image, corners)
@@ -425,18 +432,23 @@ def compute_paper_size(image, corners):
         rect = cv.minAreaRect(corners)
         return (rect.size.width, rect.size.height)
 
-    return (paper_avg_width, paper_avg_width * aspect_ratio)
+    return (round(paper_avg_width), round(paper_avg_width * aspect_ratio))
 
 def extract_paper_sheet(image, corners):
     # Step 1: Compute size (width & height) of the paper sheet
-    paper_size = compute_paper_size(image, corners)
+    (width, height) = compute_paper_size(image, corners)
 
-    # Step 3: Create destination image
+    # Step 2: Create the destination image size array
+    dim_dest_image = numpy.array([[0., 0.], [(width - 1.), 0.], [(width - 1.), (height - 1.)], [0., (height - 1.)]])
 
-    # Step 4: Compute the perspective deformation matrix
+    # Step 3: Compute the perspective deformation matrix
+    #         /!\ inputs need to be numpy array in float32
+    M = cv.getPerspectiveTransform(corners.astype(numpy.float32), dim_dest_image.astype(numpy.float32))
 
-    # Step 5: Unwrap / straighten the paper and save it to the destination image
-    return image
+    # Step 4: Extract and unwrap/straighten the paper sheet
+    paper_sheet = cv.warpPerspective(image, M, (int(width), int(height)), borderMode=cv.BORDER_CONSTANT, borderValue=(255, 255, 255))
+
+    return paper_sheet
 
 def main(images_paths):
     """Entry point"""
@@ -449,7 +461,7 @@ def main(images_paths):
     result_folder_empty = False#debug
 
     # Step 2: Create Straightened versions of images
-    paper_index = 0
+    paper_index = 1
     for image_path in images_paths:
         # Step 2.A: Ensure the path exists and is a valid file
         path = Path(image_path)
@@ -478,7 +490,7 @@ def main(images_paths):
         paper = extract_paper_sheet(image, corners)
 
         # Step 2.F: Save the paper to the result folder
-        filename = "paper_{:02d}{}".format(paper_index, RESULT_IMAGE_EXT)
+        filename = "paper_{:03d}{}".format(paper_index, RESULT_IMAGE_EXT)
         paper_index += 1
         save_to_results_folder(paper, filename)
 
@@ -490,8 +502,10 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(prog=SCRIPT_NAME, description='{} v{}, Detect Sheet of Paper, Extract & Straighten it.'.format(SCRIPT_NAME, VERSION))
     parser.add_argument('-v', '--version', action='version', version='%(prog)s '+ VERSION)
+    parser.add_argument('-d', '--debug', action='store_true')
     parser.add_argument('-i', '--images-paths', nargs='+', required=True, type=str, action='extend', help='disk path(s) to the image(s)')
 
     arguments = parser.parse_args()
+    DEBUG = arguments.debug
 
     main(arguments.images_paths)
