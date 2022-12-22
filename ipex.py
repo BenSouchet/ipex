@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 SCRIPT_NAME = 'IPEX : Image Paper EXtractor'
-VERSION = '1.0.1'
+VERSION = '1.1.0'
 
 RESULT_IMAGE_EXT = '.png' # Can be any type handled by OpenCV, see documentation for valid values.
 DETECTION_IMAGE_MAX_DIM = 1024 # In pixels, if the lagest dimension (width or height) of the input image is
