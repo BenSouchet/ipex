@@ -37,6 +37,11 @@ This will add debug images into the result subfolder.
 In case of an error you should see a formated log message in your terminal telling you exactly what is the issue.
 If the script crash or something don't work you can open an issue [here](https://github.com/BenSouchet/ipex/issues).
 
+## Improvements
+- use `numpy.ascontiguousarray` on images arrays to use them as output or dest array, reducing allocations
+- Adding more timing debug to detect bottle necks in the process
+- Expose `is_document` and `max_quality` to script arguments
+
 ## Author / Maintainer
 
 **IPEX** has been created and is currently maintained by [Ben Souchet](https://github.com/BenSouchet).

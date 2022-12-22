@@ -4,6 +4,7 @@ import math
 import shutil
 import logging
 import numpy
+from numpy.typing import NDArray
 import cv2 as cv
 from pathlib import Path
 from datetime import datetime
@@ -18,6 +19,7 @@ DETECTION_IMAGE_MAX_DIM = 1024 # In pixels, if the lagest dimension (width or he
 KERNEL_ERODE_SIZE = 3 # Size in pixels of the "brush" for the erode operation, value need to be odd (3, 5, 7, ...)
 SIMPLIFIED_CONTOUR_MAX_COEF = 0.15 # Maximum ratio of simplification allowed for the contour point reduction (e.g. simplify_contour function)
 PAPER_DEFORMATION_TOLERANCE = 0.01 # Above this value a complexe method will be used to compute paper aspect ratio
+WHITE_CORRECTION_FACTOR = 0.2 # Interval [0.0, 1.0], a bigger value remove small details but improve white background for documents
 
 DEBUG = False
 
@@ -44,7 +46,7 @@ class ColoredFormatter(logging.Formatter):
         formatter = logging.Formatter(log_format)
         return formatter.format(record)
 
-def init_logger():
+def init_logger()-> logging.Logger:
     """Initialize script logger"""
 
     logger_name = Path(__file__).stem
@@ -61,7 +63,7 @@ def init_logger():
 
 LOG = init_logger()
 
-def delete_results_folder():
+def delete_results_folder()-> bool:
     if PATH_DIR_RESULTS and PATH_DIR_RESULTS.exists():
         try:
             shutil.rmtree(PATH_DIR_RESULTS)
@@ -70,7 +72,7 @@ def delete_results_folder():
             return False
     return True
 
-def create_results_folder():
+def create_results_folder()-> bool:
     working_directory = Path.cwd()
 
     # Step 1: Create the directory path for the results and set it as a global variable
@@ -86,16 +88,16 @@ def create_results_folder():
 
     return True
 
-def save_to_results_folder(paper, filename):
-    cv.imwrite(str(PATH_DIR_RESULTS.joinpath(filename)), paper)
+def save_to_results_folder(paper: NDArray[numpy.uint8], filename: str):
+    cv.imwrite(str(PATH_DIR_RESULTS.joinpath(filename + RESULT_IMAGE_EXT)), paper)
 
-def downscale_image(image):
+def downscale_image(image: NDArray[numpy.uint8])-> tuple[float, NDArray[numpy.uint8]]:
     factor = 1.0
     height, width = image.shape[:2]
 
     # Step 1: If image doesn't need resize do nothing
     if height <= DETECTION_IMAGE_MAX_DIM and width <= DETECTION_IMAGE_MAX_DIM:
-        return 1.0, image
+        return (1.0, image)
 
     # Step 2: Determine the biggest dimension between height and width
     if height > width:
@@ -110,13 +112,16 @@ def downscale_image(image):
         width = DETECTION_IMAGE_MAX_DIM
 
     # Step 4: Resize and return the new image
-    return factor, cv.resize(image, (width, height), interpolation=cv.INTER_AREA)
+    return (factor, cv.resize(image, (width, height), interpolation=cv.INTER_AREA))
 
-def auto_brightness_and_contrast(image, clip_hist_percent=1):
-    gray = image
-    # Step 1: Convert to grayscale if not already
+def split_grayscale(image: NDArray[numpy.uint8])-> tuple[float, NDArray[numpy.uint8]]:
     if len(image.shape) >= 3:
-        gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+        YUV = cv.cvtColor(image, cv.COLOR_BGR2YUV)
+        return (YUV[:, :, 0], YUV)
+    return (image, image)
+
+def auto_brightness_and_contrast(image: NDArray[numpy.uint8], clip_hist_percent: int = 1)-> NDArray[numpy.uint8]:
+    gray, _ = split_grayscale(image)
 
     # Step 2: Calculate grayscale histogram
     hist = cv.calcHist([gray],[0],None,[256],[0,256])
@@ -150,7 +155,7 @@ def auto_brightness_and_contrast(image, clip_hist_percent=1):
     # Step 8: Appling and returning the corrected image
     return cv.convertScaleAbs(image, alpha=alpha, beta=beta)
 
-def convert_to_binary_image(image):
+def convert_to_binary_image(image: NDArray[numpy.uint8])-> NDArray[numpy.uint8]:
     # Step 1: Create the kernels, this is like brushes in painting
     kernel_type = cv.MORPH_CROSS# Seems to give the best results
     kernel_morph_size = 5# Can be adjusted, or maybe computed
@@ -182,7 +187,7 @@ def convert_to_binary_image(image):
 
     return image
 
-def scale_contour_from_centroid(contour, scale):
+def scale_contour_from_centroid(contour: NDArray[numpy.float32], scale: float)-> NDArray[numpy.float32]:
     # Step 1: Determine the centroid of the contour
     moment = cv.moments(contour)
     center_x = int(moment['m10'] / moment['m00'])
@@ -196,17 +201,16 @@ def scale_contour_from_centroid(contour, scale):
 
     # Step 4: Move back the contour to it position
     contour = contour + [center_x, center_y]
-    contour = contour.astype(numpy.int32)
 
     return contour
 
-def simplify_contour_compute_weight(contour, index):
+def simplify_contour_compute_weight(contour: NDArray[numpy.float32], index: int)-> float:
     p1 = contour[(index-1)%contour.shape[0]][0]
     p2 = contour[index][0]
     p3 = contour[(index+1)%contour.shape[0]][0]
     return (0.5 * abs((p1[0] * (p2[1] - p3[1])) + (p2[0] * (p3[1] - p1[1])) + (p3[0] * (p1[1] - p2[1]))))
 
-def simplify_contour(contour, nbr_ptr_limit=4):
+def simplify_contour(contour: NDArray[numpy.float32], nbr_ptr_limit: int = 4)-> NDArray[numpy.float32]:
     # Using a naive version of Visvalingam-Whyatt simplification algorithm
 
     # points_weights will be used to determine the importance of points,
@@ -236,7 +240,7 @@ def simplify_contour(contour, nbr_ptr_limit=4):
 
     return contour
 
-def find_paper_contour_from_binary_image(image):
+def find_paper_contour_from_binary_image(image: NDArray[numpy.uint8])-> NDArray[numpy.float32]:
     # Step 1: Find contours of shapes in the binary image
     contours = cv.findContours(image, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)[-2]
 
@@ -245,12 +249,13 @@ def find_paper_contour_from_binary_image(image):
     contour = contours[-1]
 
     # Step 3: Getting the shape from the contour
+    contour = cv.convexHull(contour)
     arclen = cv.arcLength(contour, True)
     contour = cv.approxPolyDP(contour, 0.02 * arclen, True)
     if len(contour) < 4 or not cv.isContourConvex(contour):
         # The best shape candidate seems to not be a rectangle
         return None
-    
+
     # Step 3.B: Try to simplify the contour to 4 points
     if len(contour) > 4:
         area_previous = cv.contourArea(contour)
@@ -271,37 +276,38 @@ def find_paper_contour_from_binary_image(image):
 
     return contour
 
-def retrieve_contour(image):
+def retrieve_contour(image: NDArray[numpy.uint8], paper_index: int)-> NDArray[numpy.float32]:
     if DEBUG:
         original = image.copy()
         _, original = downscale_image(original)
 
-    # Step 1: Convert image to grayscale
-    image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+    # Step 1: Convert image to grayscale (Using Y of YUV, or V of HSV is better than GRAY)
+    image = cv.cvtColor(image, cv.COLOR_BGR2YUV)
+    image = image[:, :, 0]
     if DEBUG:
-        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_01_Grayscale.png')
+        save_to_results_folder(image, 'Paper-{:03d}_DEBUG_01_Grayscale'.format(paper_index))
 
     # Step 2: Downscale the image if necessary, save the factor
     downscale_factor, image = downscale_image(image)
     if DEBUG:
-        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_02_Downscale.png')
+        save_to_results_folder(image, 'Paper-{:03d}_DEBUG_02_Downscale'.format(paper_index))
 
     # Step 3: Median blur the image (a.k.a Noise Median Reduction),
     # this help removing the unecessary details while conserving the edges
     aperture_linear_size = 9
     image = cv.medianBlur(image, aperture_linear_size)
     if DEBUG:
-        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_03_MedianBlur.png')
+        save_to_results_folder(image, 'Paper-{:03d}_DEBUG_03_Median-Blur'.format(paper_index))
 
     # Step 4: Correct the brightness and contrast (optional)
     image = auto_brightness_and_contrast(image, 5)
     if DEBUG:
-        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_04_Contrast.png')
+        save_to_results_folder(image, 'Paper-{:03d}_DEBUG_04_Contrast'.format(paper_index))
 
     # Step 5: Convert to binary map (threshold & morphological transformations)
     image = convert_to_binary_image(image)
     if DEBUG:
-        save_to_results_folder(image, 'DEBUG_Retrieve_Contour_05_Treshold.png')
+        save_to_results_folder(image, 'Paper-{:03d}_DEBUG_05_Treshold'.format(paper_index))
 
     # From this point in the process there is two very different ways:
     # 1) Using cv.findContours, extracting the biggest contour, check the shape to see it's a rectangle
@@ -317,15 +323,15 @@ def retrieve_contour(image):
         return None
 
     if DEBUG:
-        cv.drawContours(original, [contour], -1, (0, 0, 255), 1, cv.LINE_AA)
-        save_to_results_folder(original, 'DEBUG_Retrieve_Contour_06_Contour.png')
+        cv.drawContours(original, [contour.astype(numpy.int32)], -1, (0, 0, 255), 1, cv.LINE_AA)
+        save_to_results_folder(original, 'Paper-{:03d}_DEBUG_06_Contour'.format(paper_index))
 
     # Step 7: Very important! Apply the downscale factor to scale up the contour to the correct size
     contour = (contour * (1.0 / downscale_factor))
 
     return contour
 
-def get_corners_from_coutour(contour):
+def get_corners_from_coutour(contour: NDArray[numpy.float32])-> NDArray[numpy.float32]:
     # We need first to ensure a clockwise orientation for the contour
     corners = None
 
@@ -361,13 +367,7 @@ def get_corners_from_coutour(contour):
 
     return corners
 
-def normalize_vector(vector):
-    length = numpy.linalg.norm(vector)
-    if length == 0:
-       return vector
-    return vector / length
-
-def compute_aspect_ratio(image, corners):
+def compute_aspect_ratio(image: NDArray[numpy.uint8], corners: NDArray[numpy.float32])-> float:
     # Based on :
     # - https://www.microsoft.com/en-us/research/publication/2016/11/Digital-Signal-Processing.pdf
     # - http://research.microsoft.com/en-us/um/people/zhang/papers/tr03-39.pdf
@@ -408,7 +408,7 @@ def compute_aspect_ratio(image, corners):
 
     return (v / u)
 
-def compute_paper_size(image, corners):
+def compute_paper_size(image: NDArray[numpy.uint8], corners: NDArray[numpy.float32])-> tuple[int, int]:
     # Vectors of the side of the contour (clockwise)
     side_top_vec = corners[1] - corners[0]
     side_rgh_vec = corners[2] - corners[1]
@@ -435,7 +435,7 @@ def compute_paper_size(image, corners):
 
     return (round(paper_avg_width), round(paper_avg_width * aspect_ratio))
 
-def extract_paper_sheet(image, corners):
+def extract_paper_sheet(image: NDArray[numpy.uint8], corners: NDArray[numpy.float32])-> NDArray[numpy.uint8]:
     # Step 1: Compute size (width & height) of the paper sheet
     (width, height) = compute_paper_size(image, corners)
 
@@ -451,7 +451,105 @@ def extract_paper_sheet(image, corners):
 
     return paper_sheet
 
-def main(images_paths):
+def levels_adjustment(image: NDArray[numpy.uint8], darks_val: list | int, lghts_val: list | int, gamma_val: float, min_level: list | int, max_level: list | int)-> NDArray[numpy.uint8]:
+    in_darks = numpy.array([darks_val] if isinstance(darks_val, int) else darks_val, dtype=numpy.float32)
+    in_lghts = numpy.array([lghts_val] if isinstance(lghts_val, int) else lghts_val, dtype=numpy.float32)
+    in_gamma = numpy.array([gamma_val], dtype=numpy.float32)
+    out_lmin = numpy.array([min_level] if isinstance(min_level, int) else min_level, dtype=numpy.float32)
+    out_lmax = numpy.array([max_level] if isinstance(max_level, int) else max_level, dtype=numpy.float32)
+
+    corrected = numpy.clip((image - in_darks) / (in_lghts - in_darks), 0, 255)
+    corrected = (corrected ** (1. / in_gamma)) * (out_lmax - out_lmin) + out_lmin
+    corrected = numpy.clip(corrected, 0, 255).astype(numpy.uint8)
+
+    return corrected
+
+def auto_levels_adjustment(image: NDArray[numpy.uint8], is_document: bool, clip_hist_percent: float = 2.0)-> NDArray[numpy.uint8]:
+    # Step 1: Convert image to grayscale (Y of YUV color mode) if needed
+    gray, _ = split_grayscale(image)
+
+    # Step 3: Compute the normalized histogram
+    hist = cv.calcHist(gray, [0], None, [256], (0, 256))
+    hist = (hist / hist.sum()) * 100.0
+    hist = hist.flatten()
+
+    # Step 4: Find the levels darks index
+    darks_val = 0
+    percent = 0.0
+    for index, curr_hist_val in enumerate(hist):
+        percent += curr_hist_val
+        darks_val = index
+        if percent >= clip_hist_percent:
+            break
+
+    # Step 5: Find the levels lights index
+    lghts_val = 0
+    percent = 0.0
+    for index in range(255, -1, -1):
+        percent += hist[index]
+        lghts_val = index
+        if percent >= clip_hist_percent:
+            break
+
+    # Step 6: If it's a document we take the middle of lights part distribution
+    #         A "better" solution should be to find the peak (limit extrema) of the lights part [190-255]
+    if is_document:
+        percent = 0.
+        for index in range(190, lghts_val):
+            percent += hist[index]
+        limit = percent * .5
+        percent = 0.
+
+        for index in range(180, lghts_val):
+            percent += hist[index]
+            if percent >= limit:
+                lghts_val = index
+                break
+
+    image = levels_adjustment(image, darks_val, lghts_val, 1.2, 0, 255)
+
+    return image
+
+def color_blend(gray_val: numpy.uint8, binary_val: numpy.uint8)-> numpy.uint8:
+    # Slow but better in term of merged result image (not losing details), 1.2 is a constante value between [1.0, 3.0]
+    weight = min(1.0, (1.2 * (gray_val / 255)) ** 2) if binary_val > 0 else 0.
+    return int(((1.0 - weight) * gray_val) + (weight * binary_val))
+
+def improve_paper_quality(paper: NDArray[numpy.uint8], paper_index: int, is_document: bool = True, max_quality: bool = False)-> NDArray[numpy.uint8]:
+    # Step 1: Adjuste Levels
+    corrected = auto_levels_adjustment(paper, is_document)
+    if DEBUG:
+        save_to_results_folder(corrected, 'Paper-{:03d}_DEBUG_08_Levels-Correction'.format(paper_index))
+
+    if not is_document:
+        # Skip document specific improvements
+        return corrected
+
+    # Step 2: Correct the Luminosity / Luma / Lightness
+    gray, YUV = split_grayscale(corrected)
+    height, width = gray.shape[:2]
+
+    # Step 2.B: Create a binary image, white means full luminosity (255)
+    # Blocksize is 1/10 of the smallest of the two dimensions rounded to the nearest odd number
+    blocksize = int(math.ceil(min(width, height) * .05) * 2 + 1)
+    c_const = round(blocksize * .1)# 1/10 of blocksize
+    layer = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY, blocksize, c_const)
+    if DEBUG:
+        save_to_results_folder(layer, 'Paper-{:03d}_DEBUG_09_Luma-Mask'.format(paper_index))
+
+    # Step 2.C: Blend the binary image (layer) with the Luma (gray)
+    if max_quality:
+        vfunc = numpy.frompyfunc(color_blend, 2, 1)
+        gray = vfunc(gray, layer).astype(numpy.uint8)
+    else:
+        gray = cv.addWeighted(gray, 1.0, layer, WHITE_CORRECTION_FACTOR, 0.)
+
+    # Step 2.D: Set Luma (gray) as Y channel of YUV image
+    YUV[:, :, 0] = gray
+
+    return cv.cvtColor(YUV, cv.COLOR_YUV2BGR)
+
+def main(images_paths: list[str])-> bool:
     """Entry point"""
 
     # Step 1: Create the result folder
@@ -477,7 +575,7 @@ def main(images_paths):
         # Step 2.C: Retrieving the contour of the paper sheet if one is detected.
         #           Passing a copy of the image to be able to apply modifications
         #           like grayscale convertion or resizing.
-        contour = retrieve_contour(image.copy())
+        contour = retrieve_contour(image.copy(), paper_index)
         if contour is None:
             LOG.warning('Path "{}": Not able to find paper sheet in the image.'.format(path))
             continue
@@ -487,9 +585,13 @@ def main(images_paths):
 
         # Step 2.E: Extract the paper sheet from the image and Straighten it
         paper = extract_paper_sheet(image, corners)
+        if DEBUG:
+            save_to_results_folder(paper, 'Paper-{:03d}_DEBUG_07_Extracted'.format(paper_index))
+
+        paper = improve_paper_quality(paper, paper_index)
 
         # Step 2.F: Save the paper to the result folder
-        filename = "paper_{:03d}{}".format(paper_index, RESULT_IMAGE_EXT)
+        filename = "Paper-{:03d}".format(paper_index)
         paper_index += 1
         save_to_results_folder(paper, filename)
 
@@ -497,7 +599,10 @@ def main(images_paths):
     if len(os.listdir(PATH_DIR_RESULTS)) == 0:
         delete_results_folder()
 
+    return True
+
 if __name__ == '__main__':
+    import time
     import argparse
     parser = argparse.ArgumentParser(prog=SCRIPT_NAME, description='{} v{}, Detect Sheet of Paper, Extract & Straighten it.'.format(SCRIPT_NAME, VERSION))
     parser.add_argument('-v', '--version', action='version', version='%(prog)s '+ VERSION)
@@ -507,4 +612,6 @@ if __name__ == '__main__':
     arguments = parser.parse_args()
     DEBUG = arguments.debug
 
+    start_time = time.time()
     main(arguments.images_paths)
+    LOG.info("Execution time: {} seconds.".format((time.time() - start_time)))
