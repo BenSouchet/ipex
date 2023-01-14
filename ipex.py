@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 SCRIPT_NAME = 'IPEX : Image Paper EXtractor'
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 
 RESULT_IMAGE_EXT = '.png' # Can be any type handled by OpenCV, see documentation for valid values.
 DETECTION_IMAGE_MAX_DIM = 1024 # In pixels, if the lagest dimension (width or height) of the input image is
@@ -250,14 +250,18 @@ def find_paper_contour_from_binary_image(image: NDArray[numpy.uint8])-> NDArray[
 
     # Step 3: Getting the shape from the contour
     contour = cv.convexHull(contour)
+    cnt_points = len(contour)
     arclen = cv.arcLength(contour, True)
-    contour = cv.approxPolyDP(contour, 0.02 * arclen, True)
-    if len(contour) < 4 or not cv.isContourConvex(contour):
+    if cnt_points > 4:
+        contour = cv.approxPolyDP(contour, 0.02 * arclen, True)
+        cnt_points = len(contour)
+
+    if cnt_points < 4 or not cv.isContourConvex(contour):
         # The best shape candidate seems to not be a rectangle
         return None
 
     # Step 3.B: Try to simplify the contour to 4 points
-    if len(contour) > 4:
+    if cnt_points > 4:
         area_previous = cv.contourArea(contour)
         simplified_contour = simplify_contour(contour)
         area_simplified = cv.contourArea(simplified_contour)
@@ -281,9 +285,8 @@ def retrieve_contour(image: NDArray[numpy.uint8], paper_index: int)-> NDArray[nu
         original = image.copy()
         _, original = downscale_image(original)
 
-    # Step 1: Convert image to grayscale (Using Y of YUV, or V of HSV is better than GRAY)
-    image = cv.cvtColor(image, cv.COLOR_BGR2YUV)
-    image = image[:, :, 0]
+    # Step 1: Convert image to grayscale (Using Y of YUV is better than GRAY)
+    image, _ = split_grayscale(image)
     if DEBUG:
         save_to_results_folder(image, 'Paper-{:03d}_DEBUG_01_Grayscale'.format(paper_index))
 
@@ -402,11 +405,11 @@ def compute_aspect_ratio(image: NDArray[numpy.uint8], corners: NDArray[numpy.flo
     u = (k2 * p2) - p1
     v = (k3 * p3) - p1
 
-    # Step 6: Get normalized U & V
-    u = numpy.linalg.norm([u[0], u[1], (u[2] * f)])
-    v = numpy.linalg.norm([v[0], v[1], (v[2] * f)])
+    # Step 6: Get length of U & V
+    len_u = numpy.linalg.norm([u[0], u[1], (u[2] * f)])
+    len_v = numpy.linalg.norm([v[0], v[1], (v[2] * f)])
 
-    return (v / u)
+    return (len_v / len_u)
 
 def compute_paper_size(image: NDArray[numpy.uint8], corners: NDArray[numpy.float32])-> tuple[int, int]:
     # Vectors of the side of the contour (clockwise)
