@@ -1,4 +1,4 @@
-# IPEX : Image Paper EXtractor - Computer Vision Program
+# IPEX : Image Paper EXtractor
 
 ### Detect Sheets of Paper in Photographs, Extract & Straighten them!
 
